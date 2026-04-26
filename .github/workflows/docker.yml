@@ -1,0 +1,141 @@
+name: docker
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      codex_version:
+        description: 'Codex npm version to build'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Resolve Codex version
+        env:
+          REQUESTED_CODEX_VERSION: ${{ github.event.inputs.codex_version }}
+        run: |
+          if [ -n "${REQUESTED_CODEX_VERSION:-}" ]; then
+            version="$REQUESTED_CODEX_VERSION"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(npm view @openai/codex version)"
+          fi
+          echo "CODEX_VERSION=$version" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=codex-slim:$version" >> "$GITHUB_ENV"
+
+      - name: Build image
+        run: make build CODEX_VERSION="$CODEX_VERSION" DOCKER_BUILD_NETWORK=default
+
+      - name: Smoke test image
+        run: make smoke CODEX_VERSION="$CODEX_VERSION"
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Resolve Codex version
+        env:
+          REQUESTED_CODEX_VERSION: ${{ github.event.inputs.codex_version }}
+        run: |
+          if [ -n "${REQUESTED_CODEX_VERSION:-}" ]; then
+            version="$REQUESTED_CODEX_VERSION"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(npm view @openai/codex version)"
+          fi
+          echo "CODEX_VERSION=$version" >> "$GITHUB_ENV"
+          echo "IMAGE_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Set image name
+        run: |
+          echo "IMAGE_NAME=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+          echo "REPO_NAME=$(basename '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate Docker Hub secrets
+        run: |
+          test -n "${{ secrets.DOCKERHUB_USERNAME }}" || { echo "Missing DOCKERHUB_USERNAME secret"; exit 1; }
+          test -n "${{ secrets.DOCKERHUB_TOKEN }}" || { echo "Missing DOCKERHUB_TOKEN secret"; exit 1; }
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ghcr.io/${{ env.IMAGE_NAME }}
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.REPO_NAME }}
+          tags: |
+            type=raw,value=${{ env.IMAGE_VERSION }}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            CODEX_NPM_PACKAGE=@openai/codex
+            CODEX_VERSION=${{ env.CODEX_VERSION }}
+            PNPM_VERSION=10.33.2
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Update Docker Hub overview
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.REPO_NAME }}
+          short-description: Small Codex app-server image for Node/Python workspaces
