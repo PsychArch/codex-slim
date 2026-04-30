@@ -20,15 +20,15 @@ Required repository secrets:
 Local validation:
 
 ```sh
-make build CODEX_VERSION=0.125.0
-make smoke CODEX_VERSION=0.125.0
+make build CODEX_VERSION=0.128.0
+make smoke CODEX_VERSION=0.128.0
 ```
 
 Publish from a version tag:
 
 ```sh
-git tag v0.125.0
-git push origin v0.125.0
+git tag v0.128.0
+git push origin v0.128.0
 ```
 
-The published image tags are `latest` and the Codex version without the leading `v`, for example `0.125.0`.
+The published image tags are `latest` and the Codex version without the leading `v`, for example `0.128.0`.

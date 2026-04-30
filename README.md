@@ -13,7 +13,7 @@ make build
 Build a specific Codex version:
 
 ```sh
-make build CODEX_VERSION=0.125.0
+make build CODEX_VERSION=0.128.0
 ```
 
 ## Run
